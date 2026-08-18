@@ -1,0 +1,829 @@
+/*
+ * ============================================================================
+ *  Branding — RoomOS branding macro (configurable asset hosting)
+ * ============================================================================
+ *
+ *  WHAT IT DOES
+ *  ------------
+ *  Adds a PIN-protected "Branding" button letting on-site administrators apply
+ *  their own logo, halfwake logo and wallpaper.
+ *
+ *  Assets are expected to be organised one folder per customer / entity:
+ *
+ *      <asset base URL>/<customer id>/logo.png
+ *      <asset base URL>/<customer id>/halfwake.png
+ *      <asset base URL>/<customer id>/wallpaper.jpg
+ *
+ *  The administrator normally only sets the CUSTOMER ID on the panel — the
+ *  macro builds the three URLs automatically. No long URL typing on a tablet.
+ *
+ *  ASSET HOSTING — RESOLUTION ORDER
+ *  --------------------------------
+ *  For each asset the URL is resolved in this order, first non-empty wins:
+ *
+ *    1. Per-asset override   set with the "Edit" button on that row
+ *    2. Asset server         set with the "Set" button on the Asset server row
+ *    3. ASSET_BASE_URL       constant below (fleet-wide default)
+ *    4. GitHub               GITHUB_* constants below (zero-maintenance fallback)
+ *
+ *  This means the same macro works when assets live on a customer web server,
+ *  on a shared internal server, or in a public GitHub repository — and entities
+ *  can even use different servers from one another.
+ *
+ *  HOSTING REQUIREMENTS (any option)
+ *  ---------------------------------
+ *    - HTTP or HTTPS only: xCommand UserInterface Branding Fetch accepts nothing
+ *      else (no SMB, no FTP, no local path, no upload from the panel)
+ *    - Reachable WITHOUT authentication: devices send no credentials
+ *    - Must return the binary image, not an HTML preview page
+ *      -> SharePoint / OneDrive / Google Drive share links do NOT work
+ *    - Reachable from the devices (internal network or Internet)
+ *
+ *  ASSET SPECIFICATIONS
+ *  --------------------
+ *    logo.png       transparent PNG, ~272x272 px, <= 1 MB
+ *    halfwake.png   transparent PNG, ~272x272 px, <= 1 MB
+ *    wallpaper.jpg  JPEG/PNG, 3840x2160 px (4K) recommended, <= 16 MB
+ *
+ *  REQUIREMENTS
+ *  ------------
+ *    - RoomOS 11 or later, ES modules, Transpile = False
+ *    - This macro must stay ACTIVE; BrandingData must stay dormant
+ *
+ *  PARAMETERS TO REVIEW BEFORE USE
+ *  -------------------------------
+ *    PIN                MANDATORY — replace 'CHANGE_ME' with your code
+ *    ASSET_BASE_URL     fleet-wide asset server, e.g. 'https://assets.acme.com/roomos/'
+ *                       leave empty to fall back to GitHub
+ *    GITHUB_USER        GitHub account or organisation (fallback only)
+ *    GITHUB_REPO        repository holding the assets (fallback only)
+ *    GITHUB_BRANCH      usually 'main'
+ *    ASSETS_PATH        base folder inside the repo, e.g. 'assets'
+ *    USE_GITHUB_PAGES   true to use <user>.github.io/<repo>/... instead of raw
+ *    FILE_NAMES         expected file names inside each customer folder
+ *    KNOWN_CUSTOMERS    optional shortlist shown as quick-pick buttons
+ *    ADMIN_SESSION_MINUTES / REAPPLY_ENABLED / REAPPLY_TIME
+ *
+ *  IMPORTANT NOTES
+ *  ---------------
+ *    - Assets are fetched ONLY on an explicit admin action, after confirmation.
+ *      Nothing is fetched at init or restart: RoomOS keeps the images locally
+ *      once applied, so there is no need to download them again.
+ *    - Control Hub supports only ONE global branding per organisation. If a
+ *      global branding is pushed there, it will override what this macro
+ *      applies. Set REAPPLY_ENABLED to true to reclaim the branding every night.
+ *    - The custom welcome message is NOT handled here: it lives in
+ *      xConfiguration UserInterface CustomMessage and is covered by the Admin
+ *      macro (and by its configuration backups).
+ *
+ *  FIRST RUN
+ *  ---------
+ *    1. Set PIN, then ASSET_BASE_URL (or the GITHUB_* constants).
+ *    2. Publish the images to <base>/<customer id>/ on that server.
+ *    3. On the panel: Branding > set the Customer ID > Apply all.
+ *
+ * ============================================================================
+ */
+
+import xapi from 'xapi';
+
+// ===================== PARAMETERS =====================
+const PANEL_ID          = 'branding_panel';
+const DATA_MACRO        = 'BrandingData';
+const PIN               = 'CHANGE_ME';   // ⚠️ Set your own PIN
+
+// ---- Asset hosting: fleet-wide default (highest priority after panel input) ----
+// Point this at any HTTPS server. Trailing slash is optional.
+// Leave empty to use the GitHub settings below.
+const ASSET_BASE_URL    = '';            // e.g. 'https://assets.acme.com/roomos/'
+
+// ---- GitHub fallback (used only when nothing else is set) ----
+const GITHUB_USER       = 'your-github-user';
+const GITHUB_REPO       = 'roomos-branding-assets';
+const GITHUB_BRANCH     = 'main';
+const ASSETS_PATH       = 'assets';
+const USE_GITHUB_PAGES  = false;         // true -> https://<user>.github.io/<repo>/...
+
+// Expected file names inside each customer folder
+const FILE_NAMES = {
+  logo:      'logo.png',
+  halfwake:  'halfwake.png',
+  wallpaper: 'wallpaper.jpg',
+};
+
+// Optional shortlist shown as quick-pick buttons (leave empty to type only)
+const KNOWN_CUSTOMERS = [
+  'acme-paris',
+  'acme-lyon',
+  'contoso-hq',
+];
+
+// ---- Admin session ----
+const ADMIN_SESSION_MINUTES = 10;
+let   adminSessionActive    = false;
+let   adminSessionHandle    = null;
+let   adminSessionExpiresAt = 0;
+let   adminCountdownHandle  = null;
+
+// ---- Optional daily re-apply (use if Control Hub overrides local branding) ----
+const REAPPLY_ENABLED = false;
+const REAPPLY_TIME    = '03:45';   // device local time
+let   lastReapplyDay  = null;
+
+// ---- Widgets ----
+const W_TIMER        = 'br_timer';
+const W_BASE         = 'br_base';
+const W_BASE_SET     = 'br_base_set';
+const W_CUSTOMER     = 'br_customer';
+const W_CUSTOMER_SET = 'br_customer_set';
+const W_PICK         = 'br_pick';
+const W_APPLY_ALL    = 'br_apply_all';
+const W_CLEAR        = 'br_clear';
+
+const VALUE_WIDGETS = {
+  logo:      'br_val_logo',
+  halfwake:  'br_val_halfwake',
+  wallpaper: 'br_val_wallpaper',
+};
+const EDIT_WIDGETS = {
+  br_edit_logo:      'logo',
+  br_edit_halfwake:  'halfwake',
+  br_edit_wallpaper: 'wallpaper',
+};
+const APPLY_WIDGETS = {
+  br_apply_logo:      'logo',
+  br_apply_halfwake:  'halfwake',
+  br_apply_wallpaper: 'wallpaper',
+};
+
+const FIELD_META = {
+  logo:      { label: 'Logo',          type: 'Branding' },
+  halfwake:  { label: 'Halfwake logo', type: 'HalfwakeBranding' },
+  wallpaper: { label: 'Wallpaper',     type: 'Background' },
+};
+
+const PIN_FEEDBACK   = 'br_pin';
+const IN_BASE        = 'br_in_base';
+const IN_CUSTOMER    = 'br_in_customer';
+const IN_PREFIX      = 'br_in_asset_';     // br_in_asset_logo, ...
+const APPLY_FEEDBACK = 'br_confirm_apply';
+const CLEAR_FEEDBACK = 'br_confirm_clear';
+
+const MAX_VALUE_DISPLAY = 24;
+
+// ---- Persisted settings ----
+const DEFAULTS = {
+  baseUrl:   '',   // asset server set from the panel (overrides ASSET_BASE_URL)
+  customer:  '',   // folder name, e.g. 'acme-paris'
+  logo:      '',   // optional full-URL override
+  halfwake:  '',
+  wallpaper: '',
+};
+let settings = {
+  baseUrl:   DEFAULTS.baseUrl,
+  customer:  DEFAULTS.customer,
+  logo:      DEFAULTS.logo,
+  halfwake:  DEFAULTS.halfwake,
+  wallpaper: DEFAULTS.wallpaper,
+};
+
+let pendingApplyField = null;   // 'logo' | 'halfwake' | 'wallpaper' | 'all'
+
+// ===================== HELPERS =====================
+function formatMS(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m + ':' + (s < 10 ? '0' + s : s);
+}
+
+/* Keep the tail of a URL visible: the file name matters more than the host */
+function displayValue(v, placeholder = '(not set)') {
+  const s = String(v || placeholder);
+  return s.length > MAX_VALUE_DISPLAY ? '…' + s.substring(s.length - (MAX_VALUE_DISPLAY - 1)) : s;
+}
+
+function withTrailingSlash(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  return s.endsWith('/') ? s : s + '/';
+}
+
+async function setWidget(id, value) {
+  try { await xapi.Command.UserInterface.Extensions.Widget.SetValue({ WidgetId: id, Value: value }); }
+  catch (e) { /* panel closed — ignore */ }
+}
+
+async function clearWidget(id) {
+  try { await xapi.Command.UserInterface.Extensions.Widget.UnsetValue({ WidgetId: id }); }
+  catch (e) { /* ignore */ }
+}
+
+async function inCall() {
+  try {
+    const calls = await xapi.Status.SystemUnit.State.NumberOfActiveCalls.get();
+    const n = parseInt(calls, 10);
+    return !isNaN(n) && n > 0;
+  } catch (e) { return false; }
+}
+
+/* Which asset server is effectively in use, and where it comes from */
+function activeBase() {
+  if (settings.baseUrl) return { url: withTrailingSlash(settings.baseUrl), source: 'panel' };
+  if (ASSET_BASE_URL)   return { url: withTrailingSlash(ASSET_BASE_URL),   source: 'constant' };
+  if (USE_GITHUB_PAGES) {
+    return {
+      url: 'https://' + GITHUB_USER + '.github.io/' + GITHUB_REPO + '/' + ASSETS_PATH + '/',
+      source: 'github-pages',
+    };
+  }
+  return {
+    url: 'https://raw.githubusercontent.com/' + GITHUB_USER + '/' + GITHUB_REPO
+       + '/' + GITHUB_BRANCH + '/' + ASSETS_PATH + '/',
+    source: 'github-raw',
+  };
+}
+
+/* Base URL for the current customer folder */
+function customerBaseUrl() {
+  if (!settings.customer) return '';
+  return activeBase().url + settings.customer + '/';
+}
+
+/* Effective URL for one asset: per-asset override wins, otherwise built path */
+function effectiveUrl(field) {
+  if (settings[field]) return settings[field];
+  const base = customerBaseUrl();
+  return base ? base + FILE_NAMES[field] : '';
+}
+
+/* Label shown on the Asset server row */
+function baseLabel() {
+  const b = activeBase();
+  if (b.source === 'panel')    return b.url;
+  if (b.source === 'constant') return b.url + ' (default)';
+  return 'GitHub (fallback)';
+}
+
+// ===================== SETTINGS PERSISTENCE =====================
+function buildDataSource(data) {
+  return `import xapi from 'xapi';
+// Dormant data container holding the branding settings — DO NOT activate.
+const brandingData = ${JSON.stringify(data, null, 2)};
+`;
+}
+
+async function saveSettings() {
+  try {
+    await xapi.Command.Macros.Macro.Save(
+      { Name: DATA_MACRO, Overwrite: 'True', Transpile: 'False' },
+      buildDataSource(settings));
+    await xapi.Command.Macros.Macro.Deactivate({ Name: DATA_MACRO });
+    console.log('Branding settings saved.');
+  } catch (e) {
+    console.warn('Could not save branding settings: ' + (e.message || e));
+  }
+}
+
+async function loadSettings() {
+  try {
+    const list = await xapi.Command.Macros.Macro.Get({ Name: DATA_MACRO, Content: 'True' });
+    const src = list.Macro && list.Macro[0] && list.Macro[0].Content;
+    if (!src) return;
+    const match = src.match(/const brandingData = ([\s\S]*?);\n/);
+    if (!match) return;
+    const data = JSON.parse(match[1]);
+    settings = {
+      baseUrl:   data.baseUrl   || DEFAULTS.baseUrl,
+      customer:  data.customer  || DEFAULTS.customer,
+      logo:      data.logo      || DEFAULTS.logo,
+      halfwake:  data.halfwake  || DEFAULTS.halfwake,
+      wallpaper: data.wallpaper || DEFAULTS.wallpaper,
+    };
+    console.log('Branding settings loaded from ' + DATA_MACRO + '.');
+  } catch (e) {
+    console.log('No stored branding settings — using defaults.');
+  }
+}
+
+// ===================== ADMIN SESSION =====================
+function sessionRemainingSec() {
+  if (!adminSessionActive) return 0;
+  const ms = adminSessionExpiresAt - Date.now();
+  return ms > 0 ? Math.ceil(ms / 1000) : 0;
+}
+
+async function updateTimerWidget() {
+  const sec = sessionRemainingSec();
+  await setWidget(W_TIMER, sec > 0 ? 'Auto-lock in ' + formatMS(sec) : 'Locked');
+}
+
+function startCountdown() {
+  if (adminCountdownHandle) clearInterval(adminCountdownHandle);
+  updateTimerWidget();
+  adminCountdownHandle = setInterval(() => {
+    if (!adminSessionActive) { stopCountdown(); return; }
+    updateTimerWidget();
+  }, 1000);
+}
+
+function stopCountdown() {
+  if (adminCountdownHandle) { clearInterval(adminCountdownHandle); adminCountdownHandle = null; }
+}
+
+function startSession() {
+  adminSessionActive = true;
+  adminSessionExpiresAt = Date.now() + ADMIN_SESSION_MINUTES * 60 * 1000;
+  if (adminSessionHandle) clearTimeout(adminSessionHandle);
+  adminSessionHandle = setTimeout(() => { endSession(true); }, ADMIN_SESSION_MINUTES * 60 * 1000);
+  startCountdown();
+  console.log('Branding session opened for ' + ADMIN_SESSION_MINUTES + ' minute(s).');
+}
+
+async function endSession(auto = false, notify = true) {
+  if (!adminSessionActive) return;
+  adminSessionActive = false;
+  adminSessionExpiresAt = 0;
+  if (adminSessionHandle) { clearTimeout(adminSessionHandle); adminSessionHandle = null; }
+  stopCountdown();
+  try { await xapi.Command.UserInterface.Extensions.Panel.Close(); } catch (e) {}
+  if (notify) {
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Branding access locked',
+      Text: auto ? 'The session expired.' : 'The session has been closed.',
+      Duration: 4,
+    });
+  }
+  console.log('Branding session closed' + (auto ? ' (expired).' : ' (manual).'));
+}
+
+// ===================== PANEL =====================
+function assetRowXml(field, label) {
+  return `
+          <Row>
+            <Name>${label}</Name>
+            <Widget>
+              <WidgetId>${VALUE_WIDGETS[field]}</WidgetId>
+              <Type>Text</Type>
+              <Name>${displayValue(effectiveUrl(field))}</Name>
+              <Options>size=2;fontSize=small;align=left</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>br_edit_${field}</WidgetId>
+              <Type>Button</Type>
+              <Name>Edit</Name>
+              <Options>size=1</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>br_apply_${field}</WidgetId>
+              <Type>Button</Type>
+              <Name>Apply</Name>
+              <Options>size=1</Options>
+            </Widget>
+          </Row>`;
+}
+
+function pickRowXml() {
+  if (!KNOWN_CUSTOMERS.length) return '';
+  const values = KNOWN_CUSTOMERS
+    .map(c => `<Value><Key>${c}</Key><Name>${c}</Name></Value>`).join('');
+  return `
+          <Row>
+            <Name>Quick pick</Name>
+            <Widget>
+              <WidgetId>${W_PICK}</WidgetId>
+              <Type>GroupButton</Type>
+              <Options>size=4;columns=1</Options>
+              <ValueSpace>${values}</ValueSpace>
+            </Widget>
+          </Row>`;
+}
+
+function panelXml() {
+  return `
+    <Extensions>
+      <Version>1.11</Version>
+      <Panel>
+        <Order>2</Order>
+        <PanelId>${PANEL_ID}</PanelId>
+        <Origin>local</Origin>
+        <Location>HomeScreen</Location>
+        <Icon>Sliders</Icon>
+        <Color>#6F2DA8</Color>
+        <Name>Branding</Name>
+        <ActivityType>Custom</ActivityType>
+        <Page>
+          <Name>Branding settings</Name>
+          <Row>
+            <Name>Session</Name>
+            <Widget>
+              <WidgetId>${W_TIMER}</WidgetId>
+              <Type>Text</Type>
+              <Options>size=3;fontSize=small;align=center</Options>
+            </Widget>
+          </Row>
+          <Row>
+            <Name>Asset server</Name>
+            <Widget>
+              <WidgetId>${W_BASE}</WidgetId>
+              <Type>Text</Type>
+              <Name>${displayValue(baseLabel(), 'GitHub (fallback)')}</Name>
+              <Options>size=3;fontSize=small;align=left</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>${W_BASE_SET}</WidgetId>
+              <Type>Button</Type>
+              <Name>Set</Name>
+              <Options>size=1</Options>
+            </Widget>
+          </Row>
+          <Row>
+            <Name>Customer ID</Name>
+            <Widget>
+              <WidgetId>${W_CUSTOMER}</WidgetId>
+              <Type>Text</Type>
+              <Name>${settings.customer || '(not set)'}</Name>
+              <Options>size=3;fontSize=small;align=left</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>${W_CUSTOMER_SET}</WidgetId>
+              <Type>Button</Type>
+              <Name>Set</Name>
+              <Options>size=1</Options>
+            </Widget>
+          </Row>
+${pickRowXml()}
+${assetRowXml('logo', 'Logo')}
+${assetRowXml('halfwake', 'Halfwake')}
+${assetRowXml('wallpaper', 'Wallpaper')}
+          <Row>
+            <Name>All assets</Name>
+            <Widget>
+              <WidgetId>${W_APPLY_ALL}</WidgetId>
+              <Type>Button</Type>
+              <Name>Apply all</Name>
+              <Options>size=2</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>${W_CLEAR}</WidgetId>
+              <Type>Button</Type>
+              <Name>Remove branding</Name>
+              <Options>size=2</Options>
+            </Widget>
+          </Row>
+          <PageId>branding_page</PageId>
+          <Options/>
+        </Page>
+      </Panel>
+    </Extensions>`;
+}
+
+async function showButton() {
+  await xapi.Command.UserInterface.Extensions.Panel.Save({ PanelId: PANEL_ID }, panelXml());
+}
+async function hideButton() {
+  try { await xapi.Command.UserInterface.Extensions.Panel.Remove({ PanelId: PANEL_ID }); } catch (e) {}
+}
+async function updateButtonVisibility() {
+  if (await inCall()) await hideButton(); else await showButton();
+}
+
+async function refreshValues() {
+  await setWidget(W_BASE, displayValue(baseLabel(), 'GitHub (fallback)'));
+  await setWidget(W_CUSTOMER, settings.customer || '(not set)');
+  for (const field of Object.keys(VALUE_WIDGETS)) {
+    await setWidget(VALUE_WIDGETS[field], displayValue(effectiveUrl(field)));
+  }
+}
+
+async function openPanel() {
+  // Rebuild so labels and the quick-pick list stay in sync
+  await showButton();
+  await xapi.Command.UserInterface.Extensions.Panel.Open({ PanelId: PANEL_ID });
+  await clearWidget(W_PICK);
+  await updateTimerWidget();
+  await refreshValues();
+}
+
+async function backToPanel() {
+  if (adminSessionActive) await openPanel();
+}
+
+// ===================== INPUT PROMPTS =====================
+async function askPin() {
+  await xapi.Command.UserInterface.Message.TextInput.Display({
+    FeedbackId: PIN_FEEDBACK,
+    Title: 'Branding',
+    Text: 'Enter the administrator code. Access stays unlocked for ' + ADMIN_SESSION_MINUTES + ' minutes.',
+    InputType: 'PIN', KeyboardState: 'Open', SubmitText: 'Submit',
+  });
+}
+
+async function askBaseUrl() {
+  await xapi.Command.UserInterface.Message.TextInput.Display({
+    FeedbackId: IN_BASE,
+    Title: 'Asset server URL',
+    Text: 'Base URL holding the customer folders. Leave empty to use the default. Current: ' + baseLabel(),
+    InputType: 'SingleLine',
+    Placeholder: settings.baseUrl || 'https://assets.example.com/roomos/',
+    SubmitText: 'Save',
+    KeyboardState: 'Open',
+  });
+}
+
+async function askCustomerId() {
+  await xapi.Command.UserInterface.Message.TextInput.Display({
+    FeedbackId: IN_CUSTOMER,
+    Title: 'Customer ID',
+    Text: 'Folder name on the asset server. Current: ' + (settings.customer || '(not set)'),
+    InputType: 'SingleLine',
+    Placeholder: settings.customer || 'acme-paris',
+    SubmitText: 'Save',
+    KeyboardState: 'Open',
+  });
+}
+
+async function askUrlOverride(field) {
+  const current = settings[field];
+  await xapi.Command.UserInterface.Message.TextInput.Display({
+    FeedbackId: IN_PREFIX + field,
+    Title: FIELD_META[field].label + ' URL override',
+    Text: 'Leave empty to use the customer folder. Current: ' + (current || '(none)'),
+    InputType: 'SingleLine',
+    Placeholder: current || effectiveUrl(field),
+    SubmitText: 'Save',
+    KeyboardState: 'Open',
+  });
+}
+
+async function confirmApply(field) {
+  pendingApplyField = field;
+  const isAll = field === 'all';
+  const label = isAll ? 'all three assets' : FIELD_META[field].label.toLowerCase();
+  await xapi.Command.UserInterface.Message.Prompt.Display({
+    Title: 'Apply branding',
+    Text: 'This will download and apply ' + label + ' now. Continue?',
+    FeedbackId: APPLY_FEEDBACK,
+    'Option.1': 'Yes, apply now',
+    'Option.2': 'Cancel',
+  });
+}
+
+async function confirmClear() {
+  await xapi.Command.UserInterface.Message.Prompt.Display({
+    Title: 'Remove branding',
+    Text: 'Remove the logo, halfwake logo and wallpaper from this device?',
+    FeedbackId: CLEAR_FEEDBACK,
+    'Option.1': 'Yes, remove',
+    'Option.2': 'Cancel',
+  });
+}
+
+// ===================== BRANDING ACTIONS =====================
+/* Fetch a single asset — never throws */
+async function fetchSafe(field) {
+  const type = FIELD_META[field].type;
+  const url  = effectiveUrl(field);
+  if (!url) {
+    console.warn('No URL for ' + type + ' (customer ID not set), skipping');
+    return false;
+  }
+  try {
+    await xapi.Command.UserInterface.Branding.Fetch({ Type: type, URL: url });
+    console.log('Fetched ' + type + ' from ' + url);
+    return true;
+  } catch (e) {
+    console.warn('Fetch failed for ' + type + ' (' + url + '): ' + (e.message || e));
+    return false;
+  }
+}
+
+async function applyField(field) {
+  const ok = await fetchSafe(field);
+  await xapi.Command.UserInterface.Message.Alert.Display({
+    Title: 'Branding',
+    Text: FIELD_META[field].label + (ok ? ' applied' : ' failed — check logs'),
+    Duration: 5,
+  });
+}
+
+async function applyAll() {
+  const results = [];
+  for (const field of ['logo', 'halfwake', 'wallpaper']) {
+    results.push(await fetchSafe(field));
+  }
+  const ok = results.filter(Boolean).length;
+  await xapi.Command.UserInterface.Message.Alert.Display({
+    Title: 'Branding',
+    Text: ok + ' of 3 assets applied (check logs)',
+    Duration: 5,
+  });
+}
+
+async function clearBranding() {
+  let ok = 0;
+  for (const field of ['logo', 'halfwake', 'wallpaper']) {
+    try {
+      await xapi.Command.UserInterface.Branding.Clear({ Type: FIELD_META[field].type });
+      ok += 1;
+    } catch (e) {
+      console.warn('Could not clear ' + FIELD_META[field].type + ': ' + (e.message || e));
+    }
+  }
+  await xapi.Command.UserInterface.Message.Alert.Display({
+    Title: 'Branding',
+    Text: ok + ' of 3 assets removed',
+    Duration: 5,
+  });
+}
+
+// ===================== SCHEDULED RE-APPLY =====================
+function checkScheduled() {
+  updateButtonVisibility();   // self-healing visibility
+
+  if (!REAPPLY_ENABLED) return;
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const current = p(now.getHours()) + ':' + p(now.getMinutes());
+  const today = now.toDateString();
+  if (current === REAPPLY_TIME && lastReapplyDay !== today) {
+    lastReapplyDay = today;
+    console.log('--- DAILY BRANDING RE-APPLY ---');
+    applyAll();
+  }
+}
+
+// ===================== EVENTS =====================
+xapi.Event.UserInterface.Extensions.Panel.Clicked.on(async event => {
+  if (event.PanelId !== PANEL_ID) return;
+  if (await inCall()) return;
+  if (!adminSessionActive) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await askPin();
+  } else {
+    await openPanel();
+  }
+});
+
+xapi.Event.UserInterface.Message.TextInput.Response.on(async event => {
+  const fid = event.FeedbackId || '';
+
+  // ---- PIN ----
+  if (fid === PIN_FEEDBACK) {
+    if (event.Text === PIN) {
+      startSession();
+      await openPanel();
+    } else {
+      await xapi.Command.UserInterface.Message.Alert.Display({ Title: 'Access denied', Text: 'Wrong PIN', Duration: 4 });
+    }
+    return;
+  }
+
+  // ---- Asset server base URL ----
+  if (fid === IN_BASE) {
+    settings.baseUrl = (event.Text || '').trim();
+    await saveSettings();
+    console.log('Asset server set to: ' + (settings.baseUrl || '(default)'));
+    await backToPanel();
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Saved',
+      Text: settings.baseUrl ? 'Asset server updated' : 'Asset server reset to default',
+      Duration: 4,
+    });
+    return;
+  }
+
+  // ---- Customer ID ----
+  if (fid === IN_CUSTOMER) {
+    settings.customer = (event.Text || '').trim();
+    await saveSettings();
+    console.log('Customer ID set to: ' + settings.customer);
+    await backToPanel();
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Saved', Text: 'Customer ID updated — press Apply all to load the assets', Duration: 4,
+    });
+    return;
+  }
+
+  // ---- Per-asset URL override ----
+  if (fid.startsWith(IN_PREFIX)) {
+    const field = fid.substring(IN_PREFIX.length);
+    if (FIELD_META[field]) {
+      settings[field] = (event.Text || '').trim();
+      await saveSettings();
+      console.log('Override for ' + field + ': ' + (settings[field] || '(cleared)'));
+      await backToPanel();
+      await xapi.Command.UserInterface.Message.Alert.Display({
+        Title: 'Saved', Text: field + ' URL updated — press Apply to load it', Duration: 3,
+      });
+    }
+    return;
+  }
+});
+
+xapi.Event.UserInterface.Message.TextInput.Clear.on(async event => {
+  const fid = event.FeedbackId || '';
+  if (fid === PIN_FEEDBACK) { console.log('PIN entry cancelled.'); return; }
+  if (fid === IN_BASE || fid === IN_CUSTOMER || fid.startsWith(IN_PREFIX)) {
+    console.log('Edit cancelled.');
+    await backToPanel();
+  }
+});
+
+xapi.Event.UserInterface.Message.Prompt.Response.on(async event => {
+  if (event.FeedbackId === APPLY_FEEDBACK) {
+    const field = pendingApplyField;
+    pendingApplyField = null;
+    if (event.OptionId === '1' && field) {
+      if (field === 'all') await applyAll();
+      else await applyField(field);
+    } else {
+      console.log('Branding apply cancelled.');
+    }
+    await backToPanel();
+    return;
+  }
+  if (event.FeedbackId === CLEAR_FEEDBACK) {
+    if (event.OptionId === '1') await clearBranding();
+    else console.log('Branding removal cancelled.');
+    await backToPanel();
+    return;
+  }
+});
+
+xapi.Event.UserInterface.Extensions.Widget.Action.on(async event => {
+  const id = event.WidgetId;
+  const val = event.Value;
+  const type = event.Type;
+
+  // ---- Quick pick list ----
+  if (id === W_PICK && (type === 'released' || type === 'clicked')) {
+    settings.customer = val;
+    await saveSettings();
+    console.log('Customer ID set from quick pick: ' + val);
+    await refreshValues();
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Customer selected', Text: val + ' — press Apply all to load the assets', Duration: 4,
+    });
+    return;
+  }
+
+  if (type !== 'clicked') return;
+
+  if (id === W_BASE_SET) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await askBaseUrl();
+    return;
+  }
+
+  if (id === W_CUSTOMER_SET) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await askCustomerId();
+    return;
+  }
+
+  if (EDIT_WIDGETS[id]) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await askUrlOverride(EDIT_WIDGETS[id]);
+    return;
+  }
+
+  if (APPLY_WIDGETS[id]) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await confirmApply(APPLY_WIDGETS[id]);
+    return;
+  }
+
+  if (id === W_APPLY_ALL) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await confirmApply('all');
+    return;
+  }
+
+  if (id === W_CLEAR) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await confirmClear();
+    return;
+  }
+});
+
+// Call state: hide the button and close the session during calls
+xapi.Status.SystemUnit.State.NumberOfActiveCalls.on(async (calls) => {
+  await updateButtonVisibility();
+  if (parseInt(calls, 10) > 0) {
+    try { await xapi.Command.UserInterface.Extensions.Panel.Close(); } catch (e) {}
+    await endSession(false, false);
+  }
+});
+
+xapi.Event.Time.on(() => checkScheduled());
+
+// ===================== INIT =====================
+(async () => {
+  try {
+    await loadSettings();          // restore asset server, customer ID and overrides
+    await updateButtonVisibility();
+    console.log('Branding macro initialized — nothing fetched automatically.');
+  } catch (e) {
+    console.error('Init failed: ' + (e.message || e));
+  }
+})();
