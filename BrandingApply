@@ -1,0 +1,39 @@
+/*
+ * BrandingApply — dormant remote trigger for the Branding macro.
+ *
+ * Activate this macro from the device web interface, Control Hub or the API to
+ * apply the stored branding on this device.
+ *
+ *   xCommand Macros Macro Activate Name: "BrandingApply"
+ *
+ * IMPORTANT: this macro does NOT deactivate itself right after sending the
+ * signal — deactivating restarts the macro runtime on several RoomOS builds and
+ * would interrupt the fetches in progress. The Branding macro deactivates it
+ * once the apply is finished. The timeout below is only a safety net in case
+ * Branding is not active or did not answer.
+ */
+
+import xapi from 'xapi';
+
+const SIGNAL          = 'remote_branding_apply';
+const STARTUP_DELAY_MS = 3000;    // let Branding install its listeners
+const SAFETY_TIMEOUT_MS = 90000;  // re-arm if Branding never deactivated us
+
+(async () => {
+  await new Promise(resolve => setTimeout(resolve, STARTUP_DELAY_MS));
+
+  try {
+    await xapi.Command.Message.Send({ Text: SIGNAL });
+    console.log('Remote branding apply signal sent — waiting for Branding to finish.');
+  } catch (e) {
+    console.error('Signal send error: ' + (e.message || e));
+  }
+
+  // Safety net only: Branding normally deactivates this macro itself.
+  setTimeout(async () => {
+    try {
+      await xapi.Command.Macros.Macro.Deactivate({ Name: 'BrandingApply' });
+      console.log('BrandingApply self-deactivated (safety timeout).');
+    } catch (e) { /* already dormant — nothing to do */ }
+  }, SAFETY_TIMEOUT_MS);
+})();
