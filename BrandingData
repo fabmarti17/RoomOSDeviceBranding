@@ -1,0 +1,11 @@
+import xapi from 'xapi';
+// Dormant data container holding the branding settings — DO NOT activate.
+const brandingData = {
+  "baseUrl": "",
+  "customer": "acme-paris",
+  "logo": "",
+  "halfwake": "",
+  "wallpaper": "",
+  "message": "",
+  "sessionExpiresAt": 0
+};
