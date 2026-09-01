@@ -6,80 +6,92 @@
  *  WHAT IT DOES
  *  ------------
  *  Adds a PIN-protected "Branding" button letting on-site administrators apply
- *  their own logo, halfwake logo and wallpaper.
+ *  their own logo, halfwake logo, wallpaper and welcome message.
  *
- *  Assets are expected to be organised one folder per customer / entity:
+ *  Assets are organised one folder per customer / entity:
  *
  *      <asset base URL>/<customer id>/logo.png
  *      <asset base URL>/<customer id>/halfwake.png
  *      <asset base URL>/<customer id>/wallpaper.jpg
  *
- *  The administrator normally only sets the CUSTOMER ID on the panel — the
- *  macro builds the three URLs automatically. No long URL typing on a tablet.
+ *  ASSET TYPES — WHAT IS WHAT
+ *    logo.png       -> LOGO shown in awake mode          (Type: Branding)
+ *    halfwake.png   -> LOGO shown on the halfwake screen (Type: HalfwakeBranding)
+ *    wallpaper.jpg  -> the only BACKGROUND image         (Type: Background)
+ *  There is no separate halfwake background: RoomOS owns that screen's backdrop.
  *
- *  ASSET HOSTING — RESOLUTION ORDER
- *  --------------------------------
- *  For each asset the URL is resolved in this order, first non-empty wins:
+ *  WELCOME MESSAGE
+ *  ---------------
+ *  Handled here too, but it is NOT an image: it lives in
+ *  xConfiguration UserInterface CustomMessage. Setting it is instant (no
+ *  download). The staged value is stored in BrandingData so it can be re-applied
+ *  remotely together with the images.
  *
- *    1. Per-asset override   set with the "Edit" button on that row
- *    2. Asset server         set with the "Set" button on the Asset server row
+ *  TWO WAYS TO APPLY — BOTH MANUAL
+ *  -------------------------------
+ *    1. From the touch panel: Branding > Apply (per asset) or Apply all
+ *    2. From the web interface / API: activate the dormant macro BrandingApply
+ *
+ *  Nothing is ever applied automatically: no fetch at init, at restart, or on a
+ *  schedule. RoomOS keeps the images locally once applied.
+ *
+ *  ASSET HOSTING — RESOLUTION ORDER (first non-empty wins)
+ *  ------------------------------------------------------
+ *    1. Per-asset override   "Edit" button on that row
+ *    2. Asset server         "Set" button on the Asset server row
  *    3. ASSET_BASE_URL       constant below (fleet-wide default)
- *    4. GitHub               GITHUB_* constants below (zero-maintenance fallback)
+ *    4. GitHub               GITHUB_* constants (LAB / TROUBLESHOOTING ONLY —
+ *                            raw.githubusercontent.com is frequently blocked on
+ *                            corporate networks and is rate-limited; prefer
+ *                            GitHub Pages, an internal web server or Azure Blob
+ *                            Storage in production)
  *
- *  This means the same macro works when assets live on a customer web server,
- *  on a shared internal server, or in a public GitHub repository — and entities
- *  can even use different servers from one another.
- *
- *  HOSTING REQUIREMENTS (any option)
- *  ---------------------------------
- *    - HTTP or HTTPS only: xCommand UserInterface Branding Fetch accepts nothing
- *      else (no SMB, no FTP, no local path, no upload from the panel)
- *    - Reachable WITHOUT authentication: devices send no credentials
+ *  HOSTING REQUIREMENTS
+ *  --------------------
+ *    - HTTP or HTTPS only (Branding Fetch accepts nothing else)
+ *    - Reachable WITHOUT authentication (devices send no credentials)
  *    - Must return the binary image, not an HTML preview page
- *      -> SharePoint / OneDrive / Google Drive share links do NOT work
- *    - Reachable from the devices (internal network or Internet)
+ *      -> SharePoint / OneDrive / Google Drive share links do NOT work: they
+ *         return an HTML preview, use redirect chains and expiring tokens, and
+ *         their per-user authentication cannot be satisfied by a device
  *
  *  ASSET SPECIFICATIONS
  *  --------------------
  *    logo.png       transparent PNG, ~272x272 px, <= 1 MB
  *    halfwake.png   transparent PNG, ~272x272 px, <= 1 MB
  *    wallpaper.jpg  JPEG/PNG, 3840x2160 px (4K) recommended, <= 16 MB
+ *    message        plain text, <= MAX_MESSAGE_LENGTH characters
  *
  *  REQUIREMENTS
  *  ------------
  *    - RoomOS 11 or later, ES modules, Transpile = False
- *    - This macro must stay ACTIVE; BrandingData must stay dormant
+ *    - This macro must stay ACTIVE
+ *    - BrandingData must stay dormant (settings + session storage)
+ *    - BrandingApply must stay dormant (remote trigger, activate to fire)
  *
  *  PARAMETERS TO REVIEW BEFORE USE
  *  -------------------------------
- *    PIN                MANDATORY — replace 'CHANGE_ME' with your code
- *    ASSET_BASE_URL     fleet-wide asset server, e.g. 'https://assets.acme.com/roomos/'
- *                       leave empty to fall back to GitHub
- *    GITHUB_USER        GitHub account or organisation (fallback only)
- *    GITHUB_REPO        repository holding the assets (fallback only)
- *    GITHUB_BRANCH      usually 'main'
- *    ASSETS_PATH        base folder inside the repo, e.g. 'assets'
- *    USE_GITHUB_PAGES   true to use <user>.github.io/<repo>/... instead of raw
- *    FILE_NAMES         expected file names inside each customer folder
- *    KNOWN_CUSTOMERS    optional shortlist shown as quick-pick buttons
- *    ADMIN_SESSION_MINUTES / REAPPLY_ENABLED / REAPPLY_TIME
+ *    PIN                     MANDATORY — replace 'CHANGE_ME'. The panel refuses
+ *                            to unlock while it still is the default value.
+ *    ASSET_BASE_URL          fleet-wide asset server
+ *    GITHUB_*                lab fallback only
+ *    FILE_NAMES              expected file names inside each customer folder
+ *    KNOWN_CUSTOMERS         optional shortlist shown as quick-pick buttons
+ *    ADMIN_SESSION_MINUTES
+ *    SHOW_BUTTON_IN_CALL     true (default) -> button also visible during calls
+ *    KEEP_SESSION_IN_CALL    true (default) -> session survives call start
+ *    CLEAR_MESSAGE_WITH_BRANDING
  *
  *  IMPORTANT NOTES
  *  ---------------
- *    - Assets are fetched ONLY on an explicit admin action, after confirmation.
- *      Nothing is fetched at init or restart: RoomOS keeps the images locally
- *      once applied, so there is no need to download them again.
- *    - Control Hub supports only ONE global branding per organisation. If a
- *      global branding is pushed there, it will override what this macro
- *      applies. Set REAPPLY_ENABLED to true to reclaim the branding every night.
- *    - The custom welcome message is NOT handled here: it lives in
- *      xConfiguration UserInterface CustomMessage and is covered by the Admin
- *      macro (and by its configuration backups).
+ *    - Control Hub supports only ONE global branding per organisation. A global
+ *      branding pushed there overrides what this macro applies — re-apply
+ *      manually when that happens.
  *
  *  FIRST RUN
  *  ---------
  *    1. Set PIN, then ASSET_BASE_URL (or the GITHUB_* constants).
- *    2. Publish the images to <base>/<customer id>/ on that server.
+ *    2. Publish the images to <base>/<customer id>/.
  *    3. On the panel: Branding > set the Customer ID > Apply all.
  *
  * ============================================================================
@@ -88,35 +100,52 @@
 import xapi from 'xapi';
 
 // ===================== PARAMETERS =====================
-const PANEL_ID          = 'branding_panel';
-const DATA_MACRO        = 'BrandingData';
-const PIN               = 'CHANGE_ME';   // ⚠️ Set your own PIN
+const PANEL_ID    = 'branding_panel';
+const DATA_MACRO  = 'BrandingData';
+const APPLY_MACRO = 'BrandingApply';
 
-// ---- Asset hosting: fleet-wide default (highest priority after panel input) ----
-// Point this at any HTTPS server. Trailing slash is optional.
-// Leave empty to use the GitHub settings below.
-const ASSET_BASE_URL    = '';            // e.g. 'https://assets.acme.com/roomos/'
+// ⚠️ MANDATORY: replace with your own code. The panel stays locked otherwise.
+const PIN = 'CHANGE_ME';
 
-// ---- GitHub fallback (used only when nothing else is set) ----
-const GITHUB_USER       = 'your-github-user';
-const GITHUB_REPO       = 'roomos-branding-assets';
-const GITHUB_BRANCH     = 'main';
-const ASSETS_PATH       = 'assets';
-const USE_GITHUB_PAGES  = false;         // true -> https://<user>.github.io/<repo>/...
+// ---- Asset hosting: fleet-wide default ----
+const ASSET_BASE_URL = '';            // e.g. 'https://assets.acme.com/roomos/'
 
-// Expected file names inside each customer folder
+// ---- GitHub fallback (LAB / TROUBLESHOOTING ONLY) ----
+const GITHUB_USER      = 'your-github-user';
+const GITHUB_REPO      = 'roomos-branding-assets';
+const GITHUB_BRANCH    = 'main';
+const ASSETS_PATH      = 'assets';
+const USE_GITHUB_PAGES = false;       // true -> https://<user>.github.io/<repo>/...
+
 const FILE_NAMES = {
   logo:      'logo.png',
   halfwake:  'halfwake.png',
   wallpaper: 'wallpaper.jpg',
 };
 
-// Optional shortlist shown as quick-pick buttons (leave empty to type only)
 const KNOWN_CUSTOMERS = [
   'acme-paris',
   'acme-lyon',
   'contoso-hq',
 ];
+
+// Best-effort: align the wallpaper configuration after a Background fetch.
+const SET_WALLPAPER_AUTO = true;
+
+// ---- Welcome message ----
+// Documented limit for UserInterface CustomMessage is ~100 characters.
+// Confirm in the API Reference Guide of your build.
+const MAX_MESSAGE_LENGTH = 100;
+// true -> "Remove branding" also clears the welcome message
+const CLEAR_MESSAGE_WITH_BRANDING = true;
+
+// ---- Button availability during calls ----
+// true  -> the Branding button stays visible during calls (default)
+// false -> the button is removed while a call is active
+const SHOW_BUTTON_IN_CALL = true;
+// true  -> an open admin session survives the start of a call (default)
+// false -> the session is closed as soon as a call starts
+const KEEP_SESSION_IN_CALL = true;
 
 // ---- Admin session ----
 const ADMIN_SESSION_MINUTES = 10;
@@ -125,10 +154,12 @@ let   adminSessionHandle    = null;
 let   adminSessionExpiresAt = 0;
 let   adminCountdownHandle  = null;
 
-// ---- Optional daily re-apply (use if Control Hub overrides local branding) ----
-const REAPPLY_ENABLED = false;
-const REAPPLY_TIME    = '03:45';   // device local time
-let   lastReapplyDay  = null;
+// ---- Self-healing ----
+const HEAL_INTERVAL_MS = 5 * 60 * 1000;
+
+// ---- Remote trigger ----
+const REMOTE_APPLY_SIGNAL = 'remote_branding_apply';
+let   lastRemoteSignalAt  = 0;
 
 // ---- Widgets ----
 const W_TIMER        = 'br_timer';
@@ -137,6 +168,9 @@ const W_BASE_SET     = 'br_base_set';
 const W_CUSTOMER     = 'br_customer';
 const W_CUSTOMER_SET = 'br_customer_set';
 const W_PICK         = 'br_pick';
+const W_MSG          = 'br_val_message';
+const W_MSG_EDIT     = 'br_msg_edit';
+const W_MSG_CLEAR    = 'br_msg_clear';
 const W_APPLY_ALL    = 'br_apply_all';
 const W_CLEAR        = 'br_clear';
 
@@ -157,35 +191,36 @@ const APPLY_WIDGETS = {
 };
 
 const FIELD_META = {
-  logo:      { label: 'Logo',          type: 'Branding' },
+  logo:      { label: 'Logo (awake)',  type: 'Branding' },
   halfwake:  { label: 'Halfwake logo', type: 'HalfwakeBranding' },
   wallpaper: { label: 'Wallpaper',     type: 'Background' },
 };
 
-const PIN_FEEDBACK   = 'br_pin';
-const IN_BASE        = 'br_in_base';
-const IN_CUSTOMER    = 'br_in_customer';
-const IN_PREFIX      = 'br_in_asset_';     // br_in_asset_logo, ...
-const APPLY_FEEDBACK = 'br_confirm_apply';
-const CLEAR_FEEDBACK = 'br_confirm_clear';
+const PIN_FEEDBACK       = 'br_pin';
+const IN_BASE            = 'br_in_base';
+const IN_CUSTOMER        = 'br_in_customer';
+const IN_MESSAGE         = 'br_in_message';
+const IN_PREFIX          = 'br_in_asset_';
+const APPLY_FEEDBACK     = 'br_confirm_apply';
+const CLEAR_FEEDBACK     = 'br_confirm_clear';
+const MSG_CLEAR_FEEDBACK = 'br_confirm_msg_clear';
 
-const MAX_VALUE_DISPLAY = 24;
+const MAX_VALUE_DISPLAY = 30;
 
 // ---- Persisted settings ----
 const DEFAULTS = {
-  baseUrl:   '',   // asset server set from the panel (overrides ASSET_BASE_URL)
-  customer:  '',   // folder name, e.g. 'acme-paris'
-  logo:      '',   // optional full-URL override
+  baseUrl:   '',
+  customer:  '',
+  logo:      '',
   halfwake:  '',
   wallpaper: '',
+  message:   '',   // staged welcome message
+  sessionExpiresAt: 0,
 };
-let settings = {
-  baseUrl:   DEFAULTS.baseUrl,
-  customer:  DEFAULTS.customer,
-  logo:      DEFAULTS.logo,
-  halfwake:  DEFAULTS.halfwake,
-  wallpaper: DEFAULTS.wallpaper,
-};
+let settings = { ...DEFAULTS };
+
+// Live value read from xConfiguration (source of truth for display)
+let liveMessage = '';
 
 let pendingApplyField = null;   // 'logo' | 'halfwake' | 'wallpaper' | 'all'
 
@@ -196,16 +231,43 @@ function formatMS(totalSeconds) {
   return m + ':' + (s < 10 ? '0' + s : s);
 }
 
+/* Panel XML is built by string concatenation: user input must be escaped */
+function escapeXml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 /* Keep the tail of a URL visible: the file name matters more than the host */
 function displayValue(v, placeholder = '(not set)') {
   const s = String(v || placeholder);
-  return s.length > MAX_VALUE_DISPLAY ? '…' + s.substring(s.length - (MAX_VALUE_DISPLAY - 1)) : s;
+  return s.length > MAX_VALUE_DISPLAY
+    ? '…' + s.substring(s.length - (MAX_VALUE_DISPLAY - 1))
+    : s;
+}
+
+/* For free text, truncating the END is more natural than the start */
+function displayText(v, placeholder = '(empty)') {
+  const s = String(v || placeholder);
+  return s.length > MAX_VALUE_DISPLAY ? s.substring(0, MAX_VALUE_DISPLAY - 1) + '…' : s;
 }
 
 function withTrailingSlash(url) {
   const s = String(url || '').trim();
   if (!s) return '';
   return s.endsWith('/') ? s : s + '/';
+}
+
+function pinConfigured() {
+  return PIN && PIN !== 'CHANGE_ME';
+}
+
+function sanitizeMessage(text) {
+  const s = String(text || '').trim();
+  return s.length > MAX_MESSAGE_LENGTH ? s.substring(0, MAX_MESSAGE_LENGTH) : s;
 }
 
 async function setWidget(id, value) {
@@ -226,7 +288,11 @@ async function inCall() {
   } catch (e) { return false; }
 }
 
-/* Which asset server is effectively in use, and where it comes from */
+/* Panel location depends on whether the button is allowed during calls */
+function panelLocation() {
+  return SHOW_BUTTON_IN_CALL ? 'HomeScreenAndCallControls' : 'HomeScreen';
+}
+
 function activeBase() {
   if (settings.baseUrl) return { url: withTrailingSlash(settings.baseUrl), source: 'panel' };
   if (ASSET_BASE_URL)   return { url: withTrailingSlash(ASSET_BASE_URL),   source: 'constant' };
@@ -243,25 +309,63 @@ function activeBase() {
   };
 }
 
-/* Base URL for the current customer folder */
 function customerBaseUrl() {
   if (!settings.customer) return '';
   return activeBase().url + settings.customer + '/';
 }
 
-/* Effective URL for one asset: per-asset override wins, otherwise built path */
 function effectiveUrl(field) {
   if (settings[field]) return settings[field];
   const base = customerBaseUrl();
   return base ? base + FILE_NAMES[field] : '';
 }
 
-/* Label shown on the Asset server row */
 function baseLabel() {
   const b = activeBase();
-  if (b.source === 'panel')    return b.url;
-  if (b.source === 'constant') return b.url + ' (default)';
-  return 'GitHub (fallback)';
+  if (b.source === 'panel')        return b.url;
+  if (b.source === 'constant')     return b.url + ' (default)';
+  if (b.source === 'github-pages') return 'GitHub Pages (fallback)';
+  return 'GitHub raw (lab fallback)';
+}
+
+/* Does our panel currently exist on the device? */
+async function panelExists() {
+  try {
+    const res = await xapi.Command.UserInterface.Extensions.List();
+    const panels = res && res.Extensions && res.Extensions.Panel;
+    if (!panels) return false;
+    const arr = Array.isArray(panels) ? panels : [panels];
+    return arr.some(p => {
+      const id = p && (p.PanelId && p.PanelId.Value ? p.PanelId.Value : p.PanelId);
+      return id === PANEL_ID;
+    });
+  } catch (e) {
+    return false;   // unknown -> let the caller re-save
+  }
+}
+
+// ===================== WELCOME MESSAGE =====================
+async function readLiveMessage() {
+  try {
+    liveMessage = await xapi.Config.UserInterface.CustomMessage.get();
+  } catch (e) {
+    liveMessage = '';
+    console.log('Could not read CustomMessage: ' + (e.message || e));
+  }
+  return liveMessage;
+}
+
+async function writeMessage(text) {
+  const value = sanitizeMessage(text);
+  try {
+    await xapi.Config.UserInterface.CustomMessage.set(value);
+    liveMessage = value;
+    console.log('Welcome message set to: ' + (value || '(empty)'));
+    return true;
+  } catch (e) {
+    console.warn('Could not set welcome message: ' + (e.message || e));
+    return false;
+  }
 }
 
 // ===================== SETTINGS PERSISTENCE =====================
@@ -289,7 +393,7 @@ async function loadSettings() {
     const list = await xapi.Command.Macros.Macro.Get({ Name: DATA_MACRO, Content: 'True' });
     const src = list.Macro && list.Macro[0] && list.Macro[0].Content;
     if (!src) return;
-    const match = src.match(/const brandingData = ([\s\S]*?);\n/);
+    const match = src.match(/const brandingData = ([\s\S]*?);\s*\n/);
     if (!match) return;
     const data = JSON.parse(match[1]);
     settings = {
@@ -298,6 +402,8 @@ async function loadSettings() {
       logo:      data.logo      || DEFAULTS.logo,
       halfwake:  data.halfwake  || DEFAULTS.halfwake,
       wallpaper: data.wallpaper || DEFAULTS.wallpaper,
+      message:   data.message   || DEFAULTS.message,
+      sessionExpiresAt: parseInt(data.sessionExpiresAt, 10) || 0,
     };
     console.log('Branding settings loaded from ' + DATA_MACRO + '.');
   } catch (e) {
@@ -330,22 +436,44 @@ function stopCountdown() {
   if (adminCountdownHandle) { clearInterval(adminCountdownHandle); adminCountdownHandle = null; }
 }
 
-function startSession() {
-  adminSessionActive = true;
-  adminSessionExpiresAt = Date.now() + ADMIN_SESSION_MINUTES * 60 * 1000;
+function scheduleSessionEnd(ms) {
   if (adminSessionHandle) clearTimeout(adminSessionHandle);
-  adminSessionHandle = setTimeout(() => { endSession(true); }, ADMIN_SESSION_MINUTES * 60 * 1000);
+  adminSessionHandle = setTimeout(() => { endSession(true); }, ms);
+}
+
+/* Open a session. persist=false when restoring after a runtime restart. */
+async function startSession(persist = true) {
+  adminSessionActive    = true;
+  adminSessionExpiresAt = Date.now() + ADMIN_SESSION_MINUTES * 60 * 1000;
+  scheduleSessionEnd(ADMIN_SESSION_MINUTES * 60 * 1000);
   startCountdown();
+  if (persist) {
+    settings.sessionExpiresAt = adminSessionExpiresAt;
+    await saveSettings();
+  }
   console.log('Branding session opened for ' + ADMIN_SESSION_MINUTES + ' minute(s).');
+}
+
+/* Restore a session that was still valid before a runtime restart */
+async function restoreSession(remainingMs) {
+  adminSessionActive    = true;
+  adminSessionExpiresAt = Date.now() + remainingMs;
+  scheduleSessionEnd(remainingMs);
+  startCountdown();
+  console.log('Branding session restored — ' + Math.ceil(remainingMs / 1000) + 's left.');
 }
 
 async function endSession(auto = false, notify = true) {
   if (!adminSessionActive) return;
-  adminSessionActive = false;
+  adminSessionActive    = false;
   adminSessionExpiresAt = 0;
   if (adminSessionHandle) { clearTimeout(adminSessionHandle); adminSessionHandle = null; }
   stopCountdown();
   try { await xapi.Command.UserInterface.Extensions.Panel.Close(); } catch (e) {}
+  if (settings.sessionExpiresAt) {
+    settings.sessionExpiresAt = 0;
+    await saveSettings();
+  }
   if (notify) {
     await xapi.Command.UserInterface.Message.Alert.Display({
       Title: 'Branding access locked',
@@ -357,14 +485,14 @@ async function endSession(auto = false, notify = true) {
 }
 
 // ===================== PANEL =====================
-function assetRowXml(field, label) {
+function assetRowXml(field) {
   return `
           <Row>
-            <Name>${label}</Name>
+            <Name>${escapeXml(FIELD_META[field].label)}</Name>
             <Widget>
               <WidgetId>${VALUE_WIDGETS[field]}</WidgetId>
               <Type>Text</Type>
-              <Name>${displayValue(effectiveUrl(field))}</Name>
+              <Name>${escapeXml(displayValue(effectiveUrl(field)))}</Name>
               <Options>size=2;fontSize=small;align=left</Options>
             </Widget>
             <Widget>
@@ -382,10 +510,35 @@ function assetRowXml(field, label) {
           </Row>`;
 }
 
+function messageRowXml() {
+  return `
+          <Row>
+            <Name>Welcome message</Name>
+            <Widget>
+              <WidgetId>${W_MSG}</WidgetId>
+              <Type>Text</Type>
+              <Name>${escapeXml(displayText(liveMessage))}</Name>
+              <Options>size=2;fontSize=small;align=left</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>${W_MSG_EDIT}</WidgetId>
+              <Type>Button</Type>
+              <Name>Edit</Name>
+              <Options>size=1</Options>
+            </Widget>
+            <Widget>
+              <WidgetId>${W_MSG_CLEAR}</WidgetId>
+              <Type>Button</Type>
+              <Name>Clear</Name>
+              <Options>size=1</Options>
+            </Widget>
+          </Row>`;
+}
+
 function pickRowXml() {
   if (!KNOWN_CUSTOMERS.length) return '';
   const values = KNOWN_CUSTOMERS
-    .map(c => `<Value><Key>${c}</Key><Name>${c}</Name></Value>`).join('');
+    .map(c => `<Value><Key>${escapeXml(c)}</Key><Name>${escapeXml(c)}</Name></Value>`).join('');
   return `
           <Row>
             <Name>Quick pick</Name>
@@ -406,7 +559,7 @@ function panelXml() {
         <Order>2</Order>
         <PanelId>${PANEL_ID}</PanelId>
         <Origin>local</Origin>
-        <Location>HomeScreen</Location>
+        <Location>${panelLocation()}</Location>
         <Icon>Sliders</Icon>
         <Color>#6F2DA8</Color>
         <Name>Branding</Name>
@@ -426,7 +579,7 @@ function panelXml() {
             <Widget>
               <WidgetId>${W_BASE}</WidgetId>
               <Type>Text</Type>
-              <Name>${displayValue(baseLabel(), 'GitHub (fallback)')}</Name>
+              <Name>${escapeXml(displayValue(baseLabel(), 'GitHub (fallback)'))}</Name>
               <Options>size=3;fontSize=small;align=left</Options>
             </Widget>
             <Widget>
@@ -441,7 +594,7 @@ function panelXml() {
             <Widget>
               <WidgetId>${W_CUSTOMER}</WidgetId>
               <Type>Text</Type>
-              <Name>${settings.customer || '(not set)'}</Name>
+              <Name>${escapeXml(settings.customer || '(not set)')}</Name>
               <Options>size=3;fontSize=small;align=left</Options>
             </Widget>
             <Widget>
@@ -452,9 +605,10 @@ function panelXml() {
             </Widget>
           </Row>
 ${pickRowXml()}
-${assetRowXml('logo', 'Logo')}
-${assetRowXml('halfwake', 'Halfwake')}
-${assetRowXml('wallpaper', 'Wallpaper')}
+${assetRowXml('logo')}
+${assetRowXml('halfwake')}
+${assetRowXml('wallpaper')}
+${messageRowXml()}
           <Row>
             <Name>All assets</Name>
             <Widget>
@@ -478,13 +632,26 @@ ${assetRowXml('wallpaper', 'Wallpaper')}
 }
 
 async function showButton() {
+  await readLiveMessage();   // keep the displayed message in sync
   await xapi.Command.UserInterface.Extensions.Panel.Save({ PanelId: PANEL_ID }, panelXml());
 }
+
 async function hideButton() {
   try { await xapi.Command.UserInterface.Extensions.Panel.Remove({ PanelId: PANEL_ID }); } catch (e) {}
 }
+
+/* Called on call-state changes and by the self-healing timer.
+   Only re-saves the panel when it is actually missing, so an open
+   panel is never overwritten. */
 async function updateButtonVisibility() {
-  if (await inCall()) await hideButton(); else await showButton();
+  if (!SHOW_BUTTON_IN_CALL && (await inCall())) {
+    await hideButton();
+    return;
+  }
+  if (!(await panelExists())) {
+    await showButton();
+    console.log('Branding button restored.');
+  }
 }
 
 async function refreshValues() {
@@ -493,11 +660,12 @@ async function refreshValues() {
   for (const field of Object.keys(VALUE_WIDGETS)) {
     await setWidget(VALUE_WIDGETS[field], displayValue(effectiveUrl(field)));
   }
+  await readLiveMessage();
+  await setWidget(W_MSG, displayText(liveMessage));
 }
 
 async function openPanel() {
-  // Rebuild so labels and the quick-pick list stay in sync
-  await showButton();
+  await showButton();   // rebuild so labels / quick-pick / message stay in sync
   await xapi.Command.UserInterface.Extensions.Panel.Open({ PanelId: PANEL_ID });
   await clearWidget(W_PICK);
   await updateTimerWidget();
@@ -510,6 +678,15 @@ async function backToPanel() {
 
 // ===================== INPUT PROMPTS =====================
 async function askPin() {
+  if (!pinConfigured()) {
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Branding not configured',
+      Text: 'The administrator code is still the default value. Set PIN in the Branding macro before use.',
+      Duration: 8,
+    });
+    console.warn('Branding locked: PIN is still CHANGE_ME.');
+    return;
+  }
   await xapi.Command.UserInterface.Message.TextInput.Display({
     FeedbackId: PIN_FEEDBACK,
     Title: 'Branding',
@@ -534,10 +711,25 @@ async function askCustomerId() {
   await xapi.Command.UserInterface.Message.TextInput.Display({
     FeedbackId: IN_CUSTOMER,
     Title: 'Customer ID',
-    Text: 'Folder name on the asset server. Current: ' + (settings.customer || '(not set)'),
+    Text: 'Folder name on the asset server. Submitting an empty value keeps the current one. Current: '
+        + (settings.customer || '(not set)'),
     InputType: 'SingleLine',
     Placeholder: settings.customer || 'acme-paris',
     SubmitText: 'Save',
+    KeyboardState: 'Open',
+  });
+}
+
+async function askMessage() {
+  await readLiveMessage();
+  await xapi.Command.UserInterface.Message.TextInput.Display({
+    FeedbackId: IN_MESSAGE,
+    Title: 'Welcome message',
+    Text: 'Shown on the home screen. Max ' + MAX_MESSAGE_LENGTH
+        + ' characters, applied immediately. Current: ' + (liveMessage || '(empty)'),
+    InputType: 'SingleLine',
+    Placeholder: liveMessage || 'Welcome',
+    SubmitText: 'Apply',
     KeyboardState: 'Open',
   });
 }
@@ -558,7 +750,8 @@ async function askUrlOverride(field) {
 async function confirmApply(field) {
   pendingApplyField = field;
   const isAll = field === 'all';
-  const label = isAll ? 'all three assets' : FIELD_META[field].label.toLowerCase();
+  const label = isAll ? 'all three images (and the welcome message)'
+                      : FIELD_META[field].label.toLowerCase();
   await xapi.Command.UserInterface.Message.Prompt.Display({
     Title: 'Apply branding',
     Text: 'This will download and apply ' + label + ' now. Continue?',
@@ -571,15 +764,25 @@ async function confirmApply(field) {
 async function confirmClear() {
   await xapi.Command.UserInterface.Message.Prompt.Display({
     Title: 'Remove branding',
-    Text: 'Remove the logo, halfwake logo and wallpaper from this device?',
+    Text: 'Remove the logo, halfwake logo and wallpaper'
+        + (CLEAR_MESSAGE_WITH_BRANDING ? ' and the welcome message' : '') + ' from this device?',
     FeedbackId: CLEAR_FEEDBACK,
     'Option.1': 'Yes, remove',
     'Option.2': 'Cancel',
   });
 }
 
+async function confirmMessageClear() {
+  await xapi.Command.UserInterface.Message.Prompt.Display({
+    Title: 'Clear welcome message',
+    Text: 'Remove the welcome message from the home screen?',
+    FeedbackId: MSG_CLEAR_FEEDBACK,
+    'Option.1': 'Yes, clear',
+    'Option.2': 'Cancel',
+  });
+}
+
 // ===================== BRANDING ACTIONS =====================
-/* Fetch a single asset — never throws */
 async function fetchSafe(field) {
   const type = FIELD_META[field].type;
   const url  = effectiveUrl(field);
@@ -590,6 +793,11 @@ async function fetchSafe(field) {
   try {
     await xapi.Command.UserInterface.Branding.Fetch({ Type: type, URL: url });
     console.log('Fetched ' + type + ' from ' + url);
+    if (field === 'wallpaper' && SET_WALLPAPER_AUTO) {
+      // Best effort: some builds need the wallpaper mode aligned to show it.
+      try { await xapi.Config.UserInterface.Wallpaper.set('Auto'); }
+      catch (e) { console.log('Wallpaper config not set (ignored): ' + (e.message || e)); }
+    }
     return true;
   } catch (e) {
     console.warn('Fetch failed for ' + type + ' (' + url + '): ' + (e.message || e));
@@ -597,65 +805,111 @@ async function fetchSafe(field) {
   }
 }
 
-async function applyField(field) {
+async function applyField(field, silent = false) {
   const ok = await fetchSafe(field);
-  await xapi.Command.UserInterface.Message.Alert.Display({
-    Title: 'Branding',
-    Text: FIELD_META[field].label + (ok ? ' applied' : ' failed — check logs'),
-    Duration: 5,
-  });
+  if (!silent) {
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Branding',
+      Text: FIELD_META[field].label + (ok ? ' applied' : ' failed — check logs'),
+      Duration: 5,
+    });
+  }
+  return ok;
 }
 
-async function applyAll() {
+/* Apply the three images, then re-apply the staged welcome message if any */
+async function applyAll(silent = false) {
   const results = [];
   for (const field of ['logo', 'halfwake', 'wallpaper']) {
     results.push(await fetchSafe(field));
   }
   const ok = results.filter(Boolean).length;
-  await xapi.Command.UserInterface.Message.Alert.Display({
-    Title: 'Branding',
-    Text: ok + ' of 3 assets applied (check logs)',
-    Duration: 5,
-  });
+
+  let msgNote = '';
+  if (settings.message) {
+    const done = await writeMessage(settings.message);
+    msgNote = done ? ', message set' : ', message failed';
+  }
+
+  if (!silent) {
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: 'Branding',
+      Text: ok + ' of 3 images applied' + msgNote + ' (check logs)',
+      Duration: 5,
+    });
+  }
+  return ok;
+}
+
+/* Clear one asset — falls back to Branding Delete when Clear is not
+   implemented on this build ("Method not found"). */
+async function clearAsset(type) {
+  try {
+    await xapi.Command.UserInterface.Branding.Clear({ Type: type });
+    return true;
+  } catch (e1) {
+    try {
+      await xapi.Command.UserInterface.Branding.Delete({ Type: type });
+      return true;
+    } catch (e2) {
+      console.warn('Could not clear ' + type + ': ' + (e1.message || e1)
+                 + ' / ' + (e2.message || e2));
+      return false;
+    }
+  }
 }
 
 async function clearBranding() {
   let ok = 0;
   for (const field of ['logo', 'halfwake', 'wallpaper']) {
-    try {
-      await xapi.Command.UserInterface.Branding.Clear({ Type: FIELD_META[field].type });
-      ok += 1;
-    } catch (e) {
-      console.warn('Could not clear ' + FIELD_META[field].type + ': ' + (e.message || e));
+    if (await clearAsset(FIELD_META[field].type)) ok += 1;
+  }
+  let msgNote = '';
+  if (CLEAR_MESSAGE_WITH_BRANDING) {
+    const done = await writeMessage('');
+    if (done) {
+      settings.message = '';
+      await saveSettings();
+      msgNote = ', message cleared';
     }
   }
   await xapi.Command.UserInterface.Message.Alert.Display({
     Title: 'Branding',
-    Text: ok + ' of 3 assets removed',
+    Text: ok + ' of 3 images removed' + msgNote,
     Duration: 5,
   });
 }
 
-// ===================== SCHEDULED RE-APPLY =====================
-function checkScheduled() {
-  updateButtonVisibility();   // self-healing visibility
+// ===================== REMOTE APPLY =====================
+/* Triggered by activating the dormant BrandingApply macro.
+   No confirmation prompt: the caller already has admin access.
+   Branding deactivates BrandingApply itself, AFTER the fetches, so the
+   runtime is never restarted in the middle of an apply. */
+async function handleRemoteApply() {
+  const now = Date.now();
+  if (now - lastRemoteSignalAt < 5000) return;   // de-duplicate double listeners
+  lastRemoteSignalAt = now;
 
-  if (!REAPPLY_ENABLED) return;
-  const now = new Date();
-  const p = n => String(n).padStart(2, '0');
-  const current = p(now.getHours()) + ':' + p(now.getMinutes());
-  const today = now.toDateString();
-  if (current === REAPPLY_TIME && lastReapplyDay !== today) {
-    lastReapplyDay = today;
-    console.log('--- DAILY BRANDING RE-APPLY ---');
-    applyAll();
+  console.log('--- REMOTE BRANDING APPLY TRIGGERED ---');
+  try {
+    if (!settings.customer && !settings.logo && !settings.halfwake
+        && !settings.wallpaper && !settings.message) {
+      console.warn('Remote branding apply: nothing configured.');
+      return;
+    }
+    const ok = await applyAll(true);
+    console.log('Remote branding apply: ' + ok + ' of 3 images applied.');
+  } finally {
+    // Re-arm the trigger for next time (may restart the macro runtime — safe here)
+    try { await xapi.Command.Macros.Macro.Deactivate({ Name: APPLY_MACRO }); }
+    catch (e) { /* already dormant */ }
   }
 }
 
 // ===================== EVENTS =====================
 xapi.Event.UserInterface.Extensions.Panel.Clicked.on(async event => {
   if (event.PanelId !== PANEL_ID) return;
-  if (await inCall()) return;
+  if (!SHOW_BUTTON_IN_CALL && (await inCall())) return;
   if (!adminSessionActive) {
     await xapi.Command.UserInterface.Extensions.Panel.Close();
     await askPin();
@@ -669,11 +923,12 @@ xapi.Event.UserInterface.Message.TextInput.Response.on(async event => {
 
   // ---- PIN ----
   if (fid === PIN_FEEDBACK) {
-    if (event.Text === PIN) {
-      startSession();
+    if (pinConfigured() && event.Text === PIN) {
+      await startSession();
       await openPanel();
     } else {
-      await xapi.Command.UserInterface.Message.Alert.Display({ Title: 'Access denied', Text: 'Wrong PIN', Duration: 4 });
+      await xapi.Command.UserInterface.Message.Alert.Display({
+        Title: 'Access denied', Text: 'Wrong PIN', Duration: 4 });
     }
     return;
   }
@@ -692,14 +947,41 @@ xapi.Event.UserInterface.Message.TextInput.Response.on(async event => {
     return;
   }
 
-  // ---- Customer ID ----
+  // ---- Customer ID (empty input keeps the current value) ----
   if (fid === IN_CUSTOMER) {
-    settings.customer = (event.Text || '').trim();
+    const entered = (event.Text || '').trim();
+    if (!entered) {
+      console.log('Customer ID unchanged (empty input ignored).');
+      await backToPanel();
+      return;
+    }
+    settings.customer = entered;
     await saveSettings();
     console.log('Customer ID set to: ' + settings.customer);
     await backToPanel();
     await xapi.Command.UserInterface.Message.Alert.Display({
       Title: 'Saved', Text: 'Customer ID updated — press Apply all to load the assets', Duration: 4,
+    });
+    return;
+  }
+
+  // ---- Welcome message (applied immediately) ----
+  if (fid === IN_MESSAGE) {
+    const value = sanitizeMessage(event.Text);
+    const truncated = String(event.Text || '').trim().length > MAX_MESSAGE_LENGTH;
+    const ok = await writeMessage(value);
+    if (ok) {
+      settings.message = value;
+      await saveSettings();
+    }
+    await backToPanel();
+    await xapi.Command.UserInterface.Message.Alert.Display({
+      Title: ok ? 'Welcome message' : 'Error',
+      Text: ok
+        ? (value ? 'Message applied' + (truncated ? ' (truncated to ' + MAX_MESSAGE_LENGTH + ' chars)' : '')
+                 : 'Message cleared')
+        : 'Could not set the message — check logs',
+      Duration: 4,
     });
     return;
   }
@@ -723,7 +1005,8 @@ xapi.Event.UserInterface.Message.TextInput.Response.on(async event => {
 xapi.Event.UserInterface.Message.TextInput.Clear.on(async event => {
   const fid = event.FeedbackId || '';
   if (fid === PIN_FEEDBACK) { console.log('PIN entry cancelled.'); return; }
-  if (fid === IN_BASE || fid === IN_CUSTOMER || fid.startsWith(IN_PREFIX)) {
+  if (fid === IN_BASE || fid === IN_CUSTOMER || fid === IN_MESSAGE
+      || fid.startsWith(IN_PREFIX)) {
     console.log('Edit cancelled.');
     await backToPanel();
   }
@@ -748,11 +1031,26 @@ xapi.Event.UserInterface.Message.Prompt.Response.on(async event => {
     await backToPanel();
     return;
   }
+  if (event.FeedbackId === MSG_CLEAR_FEEDBACK) {
+    if (event.OptionId === '1') {
+      const ok = await writeMessage('');
+      if (ok) { settings.message = ''; await saveSettings(); }
+      await xapi.Command.UserInterface.Message.Alert.Display({
+        Title: 'Welcome message',
+        Text: ok ? 'Message cleared' : 'Could not clear the message',
+        Duration: 4,
+      });
+    } else {
+      console.log('Message clear cancelled.');
+    }
+    await backToPanel();
+    return;
+  }
 });
 
 xapi.Event.UserInterface.Extensions.Widget.Action.on(async event => {
-  const id = event.WidgetId;
-  const val = event.Value;
+  const id   = event.WidgetId;
+  const val  = event.Value;
   const type = event.Type;
 
   // ---- Quick pick list ----
@@ -781,6 +1079,18 @@ xapi.Event.UserInterface.Extensions.Widget.Action.on(async event => {
     return;
   }
 
+  if (id === W_MSG_EDIT) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await askMessage();
+    return;
+  }
+
+  if (id === W_MSG_CLEAR) {
+    await xapi.Command.UserInterface.Extensions.Panel.Close();
+    await confirmMessageClear();
+    return;
+  }
+
   if (EDIT_WIDGETS[id]) {
     await xapi.Command.UserInterface.Extensions.Panel.Close();
     await askUrlOverride(EDIT_WIDGETS[id]);
@@ -806,23 +1116,58 @@ xapi.Event.UserInterface.Extensions.Widget.Action.on(async event => {
   }
 });
 
-// Call state: hide the button and close the session during calls
+/* Remote signal — register both known event paths, whichever exists on
+   this build. handleRemoteApply() de-duplicates if both fire. */
+try {
+  xapi.Event.Message.Send.on(event => {
+    const text = event && (event.Text && event.Text.Value ? event.Text.Value : event.Text);
+    if (text === REMOTE_APPLY_SIGNAL) handleRemoteApply();
+  });
+} catch (e) { console.log('Message.Send listener unavailable: ' + (e.message || e)); }
+
+try {
+  xapi.Event.Message.Send.Text.on(text => {
+    if (text === REMOTE_APPLY_SIGNAL) handleRemoteApply();
+  });
+} catch (e) { console.log('Message.Send.Text listener unavailable: ' + (e.message || e)); }
+
+/* Call state: adjust visibility, and optionally close the session */
 xapi.Status.SystemUnit.State.NumberOfActiveCalls.on(async (calls) => {
   await updateButtonVisibility();
-  if (parseInt(calls, 10) > 0) {
+  const active = parseInt(calls, 10) > 0;
+  if (active && !SHOW_BUTTON_IN_CALL) {
     try { await xapi.Command.UserInterface.Extensions.Panel.Close(); } catch (e) {}
+  }
+  if (active && !KEEP_SESSION_IN_CALL) {
     await endSession(false, false);
   }
 });
 
-xapi.Event.Time.on(() => checkScheduled());
+/* Self-healing: re-create the button only if it disappeared */
+setInterval(() => { updateButtonVisibility(); }, HEAL_INTERVAL_MS);
 
 // ===================== INIT =====================
 (async () => {
   try {
-    await loadSettings();          // restore asset server, customer ID and overrides
-    await updateButtonVisibility();
-    console.log('Branding macro initialized — nothing fetched automatically.');
+    await loadSettings();
+    await readLiveMessage();
+
+    // Restore an admin session that survived a macro runtime restart
+    const remaining = (settings.sessionExpiresAt || 0) - Date.now();
+    if (remaining > 5000) {
+      await restoreSession(remaining);
+    } else if (settings.sessionExpiresAt) {
+      settings.sessionExpiresAt = 0;
+      await saveSettings();
+    }
+
+    if (SHOW_BUTTON_IN_CALL || !(await inCall())) await showButton();
+
+    if (!pinConfigured()) {
+      console.warn('Branding: PIN is still CHANGE_ME — the panel will stay locked.');
+    }
+    console.log('Branding macro initialized — nothing applied automatically.'
+              + ' Button in call: ' + SHOW_BUTTON_IN_CALL + '.');
   } catch (e) {
     console.error('Init failed: ' + (e.message || e));
   }
