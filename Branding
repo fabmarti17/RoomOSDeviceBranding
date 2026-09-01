@@ -32,6 +32,13 @@
  *    1. From the touch panel: Branding > Apply (per asset) or Apply all
  *    2. From the web interface / API: activate the dormant macro BrandingApply
  *
+ *  TWO WAYS TO REMOVE
+ *  ------------------
+ *    1. From the touch panel: Branding > Remove branding
+ *    2. From the web interface / API: activate the dormant macro BrandingClear
+ *       Removing affects the DEVICE only — stored settings in BrandingData are
+ *       preserved, so you can re-apply without retyping anything.
+ *
  *  Nothing is ever applied automatically: no fetch at init, at restart, or on a
  *  schedule. RoomOS keeps the images locally once applied.
  *
@@ -67,7 +74,8 @@
  *    - RoomOS 11 or later, ES modules, Transpile = False
  *    - This macro must stay ACTIVE
  *    - BrandingData must stay dormant (settings + session storage)
- *    - BrandingApply must stay dormant (remote trigger, activate to fire)
+ *    - BrandingApply must stay dormant (remote apply trigger)
+ *    - BrandingClear must stay dormant (remote remove trigger)
  *
  *  PARAMETERS TO REVIEW BEFORE USE
  *  -------------------------------
@@ -105,14 +113,14 @@ const DATA_MACRO  = 'BrandingData';
 const APPLY_MACRO = 'BrandingApply';
 
 // ⚠️ MANDATORY: replace with your own code. The panel stays locked otherwise.
-const PIN = 'CHANGE_ME';
+const PIN = '1234';
 
 // ---- Asset hosting: fleet-wide default ----
 const ASSET_BASE_URL = '';            // e.g. 'https://assets.acme.com/roomos/'
 
 // ---- GitHub fallback (LAB / TROUBLESHOOTING ONLY) ----
-const GITHUB_USER      = 'your-github-user';
-const GITHUB_REPO      = 'roomos-branding-assets';
+const GITHUB_USER      = 'fabmarti17';
+const GITHUB_REPO      = 'RoomOSDeviceBranding';
 const GITHUB_BRANCH    = 'main';
 const ASSETS_PATH      = 'assets';
 const USE_GITHUB_PAGES = false;       // true -> https://<user>.github.io/<repo>/...
@@ -120,7 +128,7 @@ const USE_GITHUB_PAGES = false;       // true -> https://<user>.github.io/<repo>
 const FILE_NAMES = {
   logo:      'logo.png',
   halfwake:  'halfwake.png',
-  wallpaper: 'wallpaper.jpg',
+  wallpaper: 'wallpaper.png',
 };
 
 const KNOWN_CUSTOMERS = [
@@ -157,8 +165,10 @@ let   adminCountdownHandle  = null;
 // ---- Self-healing ----
 const HEAL_INTERVAL_MS = 5 * 60 * 1000;
 
-// ---- Remote trigger ----
+// ---- Remote triggers ----
+const CLEAR_MACRO         = 'BrandingClear';
 const REMOTE_APPLY_SIGNAL = 'remote_branding_apply';
+const REMOTE_CLEAR_SIGNAL = 'remote_branding_clear';
 let   lastRemoteSignalAt  = 0;
 
 // ---- Widgets ----
@@ -880,7 +890,7 @@ async function clearBranding() {
   });
 }
 
-// ===================== REMOTE APPLY =====================
+// ===================== REMOTE TRIGGERS =====================
 /* Triggered by activating the dormant BrandingApply macro.
    No confirmation prompt: the caller already has admin access.
    Branding deactivates BrandingApply itself, AFTER the fetches, so the
@@ -902,6 +912,39 @@ async function handleRemoteApply() {
   } finally {
     // Re-arm the trigger for next time (may restart the macro runtime — safe here)
     try { await xapi.Command.Macros.Macro.Deactivate({ Name: APPLY_MACRO }); }
+    catch (e) { /* already dormant */ }
+  }
+}
+
+/* Triggered by activating the dormant BrandingClear macro.
+   No confirmation prompt: the caller already has admin access.
+   Branding deactivates BrandingClear itself, AFTER the removal, so the
+   runtime is never restarted in the middle of the operation.
+   Stored settings in BrandingData are preserved. */
+async function handleRemoteClear() {
+  const now = Date.now();
+  if (now - lastRemoteSignalAt < 5000) return;   // de-duplicate double listeners
+  lastRemoteSignalAt = now;
+
+  console.log('--- REMOTE BRANDING CLEAR TRIGGERED ---');
+  try {
+    let ok = 0;
+    for (const field of ['logo', 'halfwake', 'wallpaper']) {
+      if (await clearAsset(FIELD_META[field].type)) ok += 1;
+    }
+    let msgNote = '';
+    if (CLEAR_MESSAGE_WITH_BRANDING) {
+      const done = await writeMessage('');
+      if (done) {
+        settings.message = '';
+        await saveSettings();
+        msgNote = ', message cleared';
+      }
+    }
+    console.log('Remote branding clear: ' + ok + ' of 3 images removed' + msgNote + '.');
+  } finally {
+    // Re-arm the trigger for next time (may restart the macro runtime — safe here)
+    try { await xapi.Command.Macros.Macro.Deactivate({ Name: CLEAR_MACRO }); }
     catch (e) { /* already dormant */ }
   }
 }
@@ -1116,18 +1159,23 @@ xapi.Event.UserInterface.Extensions.Widget.Action.on(async event => {
   }
 });
 
-/* Remote signal — register both known event paths, whichever exists on
-   this build. handleRemoteApply() de-duplicates if both fire. */
+/* Remote signals — register both known event paths, whichever exists on
+   this build. The handlers de-duplicate if both fire. */
+function routeRemoteSignal(text) {
+  if (text === REMOTE_APPLY_SIGNAL) handleRemoteApply();
+  else if (text === REMOTE_CLEAR_SIGNAL) handleRemoteClear();
+}
+
 try {
   xapi.Event.Message.Send.on(event => {
     const text = event && (event.Text && event.Text.Value ? event.Text.Value : event.Text);
-    if (text === REMOTE_APPLY_SIGNAL) handleRemoteApply();
+    routeRemoteSignal(text);
   });
 } catch (e) { console.log('Message.Send listener unavailable: ' + (e.message || e)); }
 
 try {
   xapi.Event.Message.Send.Text.on(text => {
-    if (text === REMOTE_APPLY_SIGNAL) handleRemoteApply();
+    routeRemoteSignal(text);
   });
 } catch (e) { console.log('Message.Send.Text listener unavailable: ' + (e.message || e)); }
 
