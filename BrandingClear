@@ -1,1 +1,45 @@
+/*
+ * BrandingClear — dormant remote trigger to REMOVE branding.
+ *
+ * Symmetrical counterpart of BrandingApply. Activate it from the device web
+ * interface, Control Hub or the API to remove the logo, halfwake logo and
+ * wallpaper from this device (and the welcome message, depending on
+ * CLEAR_MESSAGE_WITH_BRANDING in the Branding macro).
+ *
+ *   xCommand Macros Macro Activate Name: "BrandingClear"
+ *
+ * IMPORTANT: this macro does NOT deactivate itself right after sending the
+ * signal — deactivating restarts the macro runtime on several RoomOS builds and
+ * would interrupt the clear operation in progress. The Branding macro
+ * deactivates it once the removal is finished. The timeout below is only a
+ * safety net in case Branding is not active or did not answer.
+ *
+ * NOTE: this removes the branding from the DEVICE only. It does NOT erase the
+ * stored settings (asset server, customer ID, URL overrides) in BrandingData,
+ * so you can re-apply later without retyping anything.
+ */
 
+import xapi from 'xapi';
+
+const SIGNAL            = 'remote_branding_clear';
+const STARTUP_DELAY_MS  = 3000;    // let Branding install its listeners
+const SAFETY_TIMEOUT_MS = 60000;   // re-arm if Branding never deactivated us
+
+(async () => {
+  await new Promise(resolve => setTimeout(resolve, STARTUP_DELAY_MS));
+
+  try {
+    await xapi.Command.Message.Send({ Text: SIGNAL });
+    console.log('Remote branding clear signal sent — waiting for Branding to finish.');
+  } catch (e) {
+    console.error('Signal send error: ' + (e.message || e));
+  }
+
+  // Safety net only: Branding normally deactivates this macro itself.
+  setTimeout(async () => {
+    try {
+      await xapi.Command.Macros.Macro.Deactivate({ Name: 'BrandingClear' });
+      console.log('BrandingClear self-deactivated (safety timeout).');
+    } catch (e) { /* already dormant — nothing to do */ }
+  }, SAFETY_TIMEOUT_MS);
+})();
